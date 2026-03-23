@@ -1,12 +1,59 @@
 function Invoke-CIPPStandardEnableMailboxAuditing {
     <#
     .FUNCTIONALITY
-    Internal
+        Internal
+    .COMPONENT
+        (APIName) EnableMailboxAuditing
+    .SYNOPSIS
+        (Label) Enable Mailbox auditing
+    .DESCRIPTION
+        (Helptext) Enables Mailbox auditing for all mailboxes and on tenant level. Disables audit bypass on all mailboxes. Unified Audit Log needs to be enabled for this standard to function.
+        (DocsDescription) Enables mailbox auditing on tenant level and for all mailboxes. Disables audit bypass on all mailboxes. By default Microsoft does not enable mailbox auditing for Resource Mailboxes, Public Folder Mailboxes and DiscoverySearch Mailboxes. Unified Audit Log needs to be enabled for this standard to function.
+    .NOTES
+        CAT
+            Exchange Standards
+        TAG
+            "CIS M365 5.0 (6.1.1)"
+            "CIS M365 5.0 (6.1.2)"
+            "CIS M365 5.0 (6.1.3)"
+            "exo_mailboxaudit"
+            "Essential 8 (1509)"
+            "Essential 8 (1683)"
+            "NIST CSF 2.0 (DE.CM-09)"
+        EXECUTIVETEXT
+            Enables comprehensive logging of all email access and modifications across all employee mailboxes, providing detailed audit trails for security investigations and compliance requirements. This helps detect unauthorized access, data breaches, and supports regulatory compliance efforts.
+        ADDEDCOMPONENT
+        IMPACT
+            Low Impact
+        ADDEDDATE
+            2024-01-08
+        POWERSHELLEQUIVALENT
+            Set-OrganizationConfig -AuditDisabled \$false
+        RECOMMENDEDBY
+            "CIS"
+            "CIPP"
+        UPDATECOMMENTBLOCK
+            Run the Tools\Update-StandardsComments.ps1 script to update this comment block
+    .LINK
+        https://docs.cipp.app/user-documentation/tenant/standards/list-standards
     #>
-    param($Tenant, $Settings)
-    $AuditState = (New-ExoRequest -tenantid $Tenant -cmdlet 'Get-OrganizationConfig').AuditDisabled
 
-    if ($Settings.remediate) {
+    param($Tenant, $Settings)
+    $TestResult = Test-CIPPStandardLicense -StandardName 'EnableMailboxAuditing' -TenantFilter $Tenant -RequiredCapabilities @('EXCHANGE_S_STANDARD', 'EXCHANGE_S_ENTERPRISE', 'EXCHANGE_S_STANDARD_GOV', 'EXCHANGE_S_ENTERPRISE_GOV', 'EXCHANGE_LITE') #No Foundation because that does not allow powershell access
+
+    if ($TestResult -eq $false) {
+        return $true
+    } #we're done.
+
+    try {
+        $AuditState = (New-ExoRequest -tenantid $Tenant -cmdlet 'Get-OrganizationConfig').AuditDisabled
+    } catch {
+        $ErrorMessage = Get-NormalizedError -Message $_.Exception.Message
+        Write-LogMessage -API 'Standards' -Tenant $Tenant -Message "Could not get the EnableMailboxAuditing state for $Tenant. Error: $ErrorMessage" -Sev Error
+        return
+    }
+
+    if ($Settings.remediate -eq $true) {
         if ($AuditState) {
             # Enable tenant level mailbox audit
             try {
@@ -14,31 +61,55 @@ function Invoke-CIPPStandardEnableMailboxAuditing {
                 Write-LogMessage -API 'Standards' -tenant $Tenant -message 'Tenant level mailbox audit enabled' -sev Info
                 $LogMessage = 'Tenant level mailbox audit enabled. '
             } catch {
-                Write-LogMessage -API 'Standards' -tenant $Tenant -message "Failed to enable tenant level mailbox audit. Error: $($_.exception.message)" -sev Error
+                $ErrorMessage = Get-NormalizedError -Message $_.Exception.Message
+                Write-LogMessage -API 'Standards' -tenant $Tenant -message "Failed to enable tenant level mailbox audit. Error: $ErrorMessage" -sev Error
             }
         } else {
             $LogMessage = 'Tenant level mailbox audit already enabled. '
         }
 
-        # Check for mailbox audit on all mailboxes. Enable for all that it's not enabled for
-        $Mailboxes = New-ExoRequest -tenantid $Tenant -cmdlet 'Get-Mailbox' -cmdParams @{ResultSize = 'Unlimited' } | Where-Object { $_.AuditEnabled -ne $true }
-        $Mailboxes | ForEach-Object {
-            try {
-                New-ExoRequest -tenantid $Tenant -cmdlet 'Set-Mailbox' -cmdParams @{Identity = $_.UserPrincipalName; AuditEnabled = $true } -Anchor $_.UserPrincipalName 
-                Write-LogMessage -API 'Standards' -tenant $Tenant -message "User level mailbox audit enabled for $($_.UserPrincipalName)" -sev Info
-            } catch {
-                Write-LogMessage -API 'Standards' -tenant $Tenant -message "Failed to enable user level mailbox audit for $($_.UserPrincipalName). Error: $($_.exception.message)" -sev Error
+        # Commented out because MS recommends NOT doing this anymore. From docs: https://learn.microsoft.com/en-us/purview/audit-mailboxes#verify-mailbox-auditing-on-by-default-is-turned-on
+        # When you turn on mailbox auditing on by default for the organization, the AuditEnabled property for affected mailboxes doesn't change from False to True. In other words, mailbox auditing on by default ignores the AuditEnabled property on mailboxes.
+        # Auditing is automatically turned on when you create a new mailbox. You don't need to manually enable mailbox auditing for new users.
+        # You don't need to manage the mailbox actions that are audited. A predefined set of mailbox actions are audited by default for each sign-in type (Admin, Delegate, and Owner).
+        # When Microsoft releases a new mailbox action, the action might be added automatically to the list of mailbox actions that are audited by default (subject to the user having the appropriate license). This result means you don't need to add new actions on mailboxes as they're released.
+        # You have a consistent mailbox auditing policy across your organization because you're auditing the same actions for all mailboxes.
+        #$Mailboxes = New-ExoRequest -tenantid $Tenant -cmdlet 'Get-Mailbox' -cmdParams @{filter = "auditenabled -eq 'False'" } -useSystemMailbox $true -Select 'AuditEnabled,UserPrincipalName'
+        #$Request = $mailboxes | ForEach-Object {
+        #    @{
+        #       CmdletInput = @{
+        #          CmdletName = 'Set-Mailbox'
+        #         Parameters = @{Identity = $_.UserPrincipalName; AuditEnabled = $true }
+        #    }
+        #}
+        #}
+
+        #$BatchResults = New-ExoBulkRequest -tenantid $tenant -cmdletArray @($Request)
+        #$BatchResults | ForEach-Object {
+        #    if ($_.error) {
+        #        $ErrorMessage = Get-NormalizedError -Message $_.error
+        #        Write-Host "Failed to enable user level mailbox audit for $($_.target). Error: $ErrorMessage"
+        #        Write-LogMessage -API 'Standards' -tenant $Tenant -message "Failed to enable user level mailbox audit for $($_.target). Error: $ErrorMessage" -sev Error
+        # }
+        #}
+
+        # Disable audit bypass for all mailboxes that have it enabled
+
+        #$BypassMailboxes = New-ExoRequest -tenantid $Tenant -cmdlet 'Get-MailboxAuditBypassAssociation' -select 'GUID, AuditBypassEnabled, Name' -useSystemMailbox $true | Where-Object { $_.AuditBypassEnabled -eq $true }
+        $Request = foreach ($Mailbox in $BypassMailboxes) {
+            @{
+                CmdletInput = @{
+                    CmdletName = 'Set-MailboxAuditBypassAssociation'
+                    Parameters = @{Identity = $Mailbox.Guid; AuditBypassEnabled = $false }
+                }
             }
         }
 
-        # Disable audit bypass for all mailboxes that have it enabled
-        $BypassMailboxes = New-ExoRequest -tenantid $Tenant -cmdlet 'Get-MailboxAuditBypassAssociation' -cmdParams @{ResultSize = 'Unlimited' } | Where-Object { $_.AuditBypassEnabled -eq $true }
-        $BypassMailboxes | ForEach-Object {
-            try {
-                New-ExoRequest -tenantid $Tenant -cmdlet 'Set-MailboxAuditBypassAssociation' -cmdParams @{Identity = $_.Guid; AuditBypassEnabled = $false } -UseSystemMailbox $true
-                Write-LogMessage -API 'Standards' -tenant $Tenant -message "Mailbox audit bypass disabled for $($_.Name)" -sev Info
-            } catch {
-                Write-LogMessage -API 'Standards' -tenant $Tenant -message "Failed to disable mailbox audit bypass for $($_.Name). Error: $($_.exception.message)" -sev Error
+        $BatchResults = New-ExoBulkRequest -tenantid $tenant -cmdletArray @($Request)
+        foreach ($Result in $BatchResults) {
+            if ($Result.error) {
+                $ErrorMessage = Get-NormalizedError -Message $Result.error
+                Write-LogMessage -API 'Standards' -tenant $tenant -message "Failed to disable mailbox audit bypass for $($Result.target). Error: $ErrorMessage" -sev Error
             }
         }
 
@@ -51,23 +122,33 @@ function Invoke-CIPPStandardEnableMailboxAuditing {
             }
             if ($BypassMailboxes.Count -eq 0) {
                 'Mailbox audit bypass already disabled for all mailboxes'
-            }    
+            }
         }
-        
+
         Write-LogMessage -API 'Standards' -tenant $Tenant -message $LogMessage -sev Info
     }
 
-    if ($Settings.alert) {
+    if ($Settings.alert -eq $true) {
         if ($AuditState) {
-            Write-LogMessage -API 'Standards' -tenant $Tenant -message 'Tenant level mailbox audit is not enabled' -sev Alert
+            Write-StandardsAlert -message 'Tenant level mailbox audit is not enabled' -object $AuditState -tenant $Tenant -standardName 'EnableMailboxAuditing' -standardId $Settings.standardId
+            Write-LogMessage -API 'Standards' -tenant $Tenant -message 'Tenant level mailbox audit is not enabled' -sev Info
         } else {
             Write-LogMessage -API 'Standards' -tenant $Tenant -message 'Tenant level mailbox audit is enabled' -sev Info
         }
     }
-    
-    if ($Settings.report) {
+
+    if ($Settings.report -eq $true) {
         $AuditState = -not $AuditState
-        Add-CIPPBPAField -FieldName 'MailboxAuditingEnabled' -FieldValue [bool]$AuditState -StoreAs bool -Tenant $Tenant
+
+        $CurrentValue = [PSCustomObject]@{
+            EnableMailboxAuditing = $AuditState
+        }
+        $ExpectedValue = [PSCustomObject]@{
+            EnableMailboxAuditing = $true
+        }
+
+        Set-CIPPStandardsCompareField -FieldName 'standards.EnableMailboxAuditing' -CurrentValue $CurrentValue -ExpectedValue $ExpectedValue -Tenant $Tenant
+        Add-CIPPBPAField -FieldName 'MailboxAuditingEnabled' -FieldValue $AuditState -StoreAs bool -Tenant $Tenant
     }
-    
+
 }
